@@ -1,0 +1,88 @@
+name: Build Vira APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get files
+        uses: actions/checkout@v4
+
+      - name: Find project zip
+        id: chk
+        run: |
+          ZIP=""
+          if [ -f vira.zip ]; then ZIP=vira.zip; elif [ -f project.zip ]; then ZIP=project.zip; fi
+          if [ -z "$ZIP" ]; then
+            echo "No vira.zip in repo root yet, nothing to build"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Building from $ZIP"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          fi
+
+      - name: Unpack project
+        if: steps.chk.outputs.ok == 'true'
+        run: |
+          rm -rf _p && mkdir _p
+          unzip -q "$ZIP" -d _p
+          SET=$(find _p -name settings.gradle.kts | head -1)
+          if [ -z "$SET" ]; then echo "settings.gradle.kts not found inside zip"; find _p | head -50; exit 1; fi
+          echo "PROJ=$(dirname "$SET")" >> "$GITHUB_ENV"
+
+      - name: Set up Java
+        if: steps.chk.outputs.ok == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        if: steps.chk.outputs.ok == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Prepare signing key
+        if: steps.chk.outputs.ok == 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "BUILD_TYPE=release" >> "$GITHUB_ENV"
+            echo "Signing key found: building a signed release APK"
+          else
+            echo "BUILD_TYPE=debug" >> "$GITHUB_ENV"
+            echo "No signing key set: building a debug APK"
+          fi
+
+      - name: Build APK
+        if: steps.chk.outputs.ok == 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ "$BUILD_TYPE" = "release" ]; then
+            gradle -p "$PROJ" assembleRelease --no-daemon --stacktrace
+          else
+            gradle -p "$PROJ" assembleDebug --no-daemon --stacktrace
+          fi
+
+      - name: Collect APK
+        if: steps.chk.outputs.ok == 'true'
+        run: |
+          mkdir -p out
+          cp "$PROJ"/app/build/outputs/apk/$BUILD_TYPE/*.apk out/Vira.apk
+
+      - name: Upload APK
+        if: steps.chk.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vira-apk
+          path: out/Vira.apk
