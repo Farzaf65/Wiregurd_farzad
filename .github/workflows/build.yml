@@ -68,11 +68,18 @@ jobs:
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
+          set +e
           if [ "$BUILD_TYPE" = "release" ]; then
-            gradle -p "$PROJ" assembleRelease --no-daemon --stacktrace
+            gradle -p "$PROJ" assembleRelease --no-daemon --console=plain > build.log 2>&1
           else
-            gradle -p "$PROJ" assembleDebug --no-daemon --stacktrace
+            gradle -p "$PROJ" assembleDebug --no-daemon --console=plain > build.log 2>&1
           fi
+          RC=$?
+          if [ $RC -ne 0 ]; then
+            grep -E "^e: |error:|What went wrong" -A3 build.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done
+            tail -60 build.log
+          fi
+          exit $RC
 
       - name: Collect APK
         if: steps.chk.outputs.ok == 'true'
@@ -86,3 +93,4 @@ jobs:
         with:
           name: Vira-apk
           path: out/Vira.apk
+          
